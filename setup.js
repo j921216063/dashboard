@@ -235,11 +235,11 @@ export const formatValue = (val: number | undefined, currency: string, exchangeR
   const rate = currency === 'TWD' ? exchangeRate : 1;
   const convertedVal = val * rate;
   const symbol = currency === 'TWD' ? 'NT$' : '$';
-  
+   
   if (isInt) {
       return \`\${symbol}\${Math.floor(convertedVal).toLocaleString()}\`;
   }
-  
+   
   return \`\${symbol}\${convertedVal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}\`;
 };
 
@@ -520,9 +520,13 @@ export const parseCSV = (csvText: string): Transaction[] => {
 
         if (entry['Transaction Date'] && entry['Symbol'] && !entry['Symbol'].includes('CASH')) {
             const type = entry['Type'] || 'Other';
-            const shares = parseFloat(entry['Shares Owned'] || '0');
-            const price = parseFloat(entry['Cost Per Share'] || '0');
-            const commission = parseFloat(entry['Commission'] || '0');
+            // Fix: remove $ and , from numbers to prevent parsing errors
+            const cleanNumber = (val: string) => parseFloat(val ? val.replace(/[$,]/g, '') : '0');
+            
+            const shares = cleanNumber(entry['Shares Owned']);
+            const price = cleanNumber(entry['Cost Per Share']);
+            const commission = cleanNumber(entry['Commission']);
+            
             const currency = entry['Currency'] || 'USD';
             let amount = 0;
             
@@ -569,15 +573,22 @@ export const processPortfolioData = (
         priceLookup[sym] = new Map(marketData[sym].map(d => [d.date, d.price])); 
     });
 
-    const startDate = new Date(filteredTx[0].date);
-    const endDate = new Date(); 
+    // FIX: Set startDate to the VERY END of the first transaction day (23:59:59.999).
+    // Using UTC construction ensures we don't get shifted to the previous day due to timezone offsets.
+    const firstTxDate = new Date(filteredTx[0].date);
+    const startDate = new Date(firstTxDate);
+    startDate.setUTCHours(23, 59, 59, 999);
+    
+    const now = new Date();
+    const endDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+
     const chartData: ChartDataPoint[] = [];
     let currentDate = new Date(startDate);
     
     let txIndex = 0;
     const lastKnownPrices: Record<string, number> = {};
 
-    while (currentDate <= endDate) {
+    while (currentDate.getTime() <= endDate.getTime()) {
         const currentDateTs = currentDate.getTime();
         const dateStr = currentDate.toISOString().split('T')[0];
 
@@ -589,10 +600,13 @@ export const processPortfolioData = (
                 currencyMap[tx.symbol] = tx.currency; 
             }
             
-            // Fix: Initialize lastKnownPrice with transaction price if unknown
-            // This prevents 0 value drop when market data is missing for the transaction day
-            if (lastKnownPrices[tx.symbol] === undefined && tx.price > 0) {
+            // Critical: Always cache the transaction price immediately.
+            // This ensures that even if market data is missing for this day, we have a price baseline.
+            if (tx.price > 0) {
                 lastKnownPrices[tx.symbol] = tx.price;
+            } else if (Math.abs(tx.amount) > 0 && tx.shares > 0) {
+                // Derived price fallback if price column was empty but amount existed
+                lastKnownPrices[tx.symbol] = Math.abs(tx.amount) / tx.shares;
             }
 
             if (tx.type === 'Buy') {
@@ -620,18 +634,46 @@ export const processPortfolioData = (
             const shares = holdingsMap[sym];
             if (shares > 0.0001) {
                 let price = 0;
+                
+                // Priority 1: User Override
                 if (priceOverrides[sym]) {
                     price = priceOverrides[sym];
-                } else {
+                } 
+                else {
+                    // Priority 2: Market Data
                     const lookupPrice = priceLookup[sym]?.get(dateStr);
-                    if (lookupPrice !== undefined) lastKnownPrices[sym] = lookupPrice;
+                    if (lookupPrice && lookupPrice > 0) {
+                        lastKnownPrices[sym] = lookupPrice;
+                    }
+                    
+                    // Priority 3: Last Known Price
                     price = lastKnownPrices[sym] || 0;
                 }
+
+                // Priority 4: Average Cost Fallback (CRITICAL FIX: Ensure this runs if price is 0)
+                if (price <= 0 && costBasisMap[sym] > 0 && shares > 0) {
+                    price = costBasisMap[sym] / shares;
+                    lastKnownPrices[sym] = price; // Update cache
+                }
+
                 dailyValue += shares * price;
             }
         });
 
-        if (dailyValue > 0 || totalInvested > 0) {
+        if (dailyValue <= 0.001 && totalInvested > 0) {
+            // Safety: Force value = invested if value is anomalously zero to prevent -100% spikes
+            // This happens if price lookup fails completely for the very first day
+            const safeValue = totalInvested;
+            
+            chartData.push({ 
+                date: dateStr, 
+                rawDate: new Date(currentDate), 
+                value: safeValue, 
+                invested: totalInvested,
+                returnAbs: 0,
+                returnPct: 0
+            });
+        } else if (dailyValue > 0 || totalInvested > 0) {
             chartData.push({ 
                 date: dateStr, 
                 rawDate: new Date(currentDate), 
@@ -641,7 +683,8 @@ export const processPortfolioData = (
                 returnPct: totalInvested > 0 ? (dailyValue - totalInvested) / totalInvested * 100 : 0
             });
         }
-        currentDate.setDate(currentDate.getDate() + 1);
+        // Increment by 1 UTC day
+        currentDate.setUTCDate(currentDate.getUTCDate() + 1);
     }
 
     const currentHoldings: Holding[] = [];
@@ -651,6 +694,12 @@ export const processPortfolioData = (
         const shares = holdingsMap[sym];
         if (shares > 0.001) {
             let price = priceOverrides[sym] ? priceOverrides[sym] : (lastKnownPrices[sym] || 0);
+            
+            // Fix: Apply Avg Cost fallback for Current Holdings table as well!
+            if (price <= 0 && costBasisMap[sym] > 0 && shares > 0) {
+                price = costBasisMap[sym] / shares;
+            }
+
             const val = shares * price;
             currentTotalValue += val;
             currentHoldings.push({
@@ -836,18 +885,37 @@ const PdfTemplate = ({ data, selectedPortfolio, exchangeRate, currencyMode }: an
 
     return (
         <div id="pdf-hidden-zone" className="fixed top-0 left-[-15000px] w-[1280px] -z-50 bg-white">
-            <div className="w-[1280px] min-h-[900px] p-[60px] bg-white mb-5 relative box-border">
+            {/* Page 1: Dashboard Overview */}
+            <div className="pdf-page w-[1280px] min-h-[900px] p-[60px] pb-20 bg-white mb-5 relative box-border">
                 <div className="flex justify-between items-end border-b-2 border-blue-600 pb-4 mb-6">
-                    <div><h1 className="text-3xl font-extrabold text-gray-900">{selectedPortfolio}</h1><p className="text-gray-500 mt-1">年度投資績效報告 (Desktop View)</p></div>
+                    <div><h1 className="text-3xl font-extrabold text-gray-900">{selectedPortfolio}</h1><p className="text-gray-500 mt-1">年度投資績效報告 (Dashboard View)</p></div>
                     <div className="text-right"><p className="text-sm text-gray-400">製表日期</p><p className="font-bold">{new Date().toLocaleDateString()}</p></div>
                 </div>
+                
+                {/* Metric Cards */}
                 <div className="grid grid-cols-4 gap-6 mb-8">
                     <MetricCard title="目前市值" value={formatValue(data.summary.totalValue, currencyMode, exchangeRate, true)} subValue={formatValue(data.summary.totalValue, currencyMode==='TWD'?'USD':'TWD', exchangeRate, true)} trend={data.summary.returnPcnt>=0?'up':'down'} />
                     <MetricCard title="淨投入本金" value={formatValue(data.summary.totalCost, currencyMode, exchangeRate, true)} subValue={formatValue(data.summary.totalCost, currencyMode==='TWD'?'USD':'TWD', exchangeRate, true)} trend="neutral" />
                     <MetricCard title="總報酬" value={formatValue(data.summary.totalReturn, currencyMode, exchangeRate, true)} subValue={formatValue(data.summary.totalReturn, currencyMode==='TWD'?'USD':'TWD', exchangeRate, true)} trend={data.summary.totalReturn>=0?'up':'down'} />
                     <MetricCard title="XIRR" value={\`\${data.summary.annualizedReturn.toFixed(2)}%\`} subValue="年化資金效率" trend={data.summary.annualizedReturn>0?'up':'down'} />
                 </div>
-                <div className="flex gap-4 h-[300px] mb-8">
+
+                {/* Risk Metrics - Added to PDF */}
+                <div className="bg-blue-50 rounded-xl p-6 border border-blue-100 mb-8">
+                    <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-blue-900 font-bold flex items-center gap-2"><Icons.Activity size={20} /> 進階風險指標 (Risk Metrics)</h3>
+                        <div className="flex items-center gap-2 text-blue-700 text-xs font-mono bg-blue-100 px-2 py-1 rounded"><span>匯率基準: {exchangeRate}</span></div>
+                    </div>
+                    <div className="grid grid-cols-4 gap-6">
+                        <div><span className="text-blue-600 text-xs font-bold uppercase block mb-1">最大回撤</span><span className="text-2xl font-bold text-gray-900">-{data.summary.maxDrawdown.toFixed(2)}%</span></div>
+                        <div><span className="text-blue-600 text-xs font-bold uppercase block mb-1">夏普比率</span><span className="text-2xl font-bold text-gray-900">{data.summary.sharpeRatio.toFixed(2)}</span></div>
+                        <div><span className="text-blue-600 text-xs font-bold uppercase block mb-1">波動率</span><span className="text-2xl font-bold text-gray-900">{data.summary.volatility.toFixed(2)}%</span></div>
+                        <div><span className="text-blue-600 text-xs font-bold uppercase block mb-1">獲利勝率</span><span className="text-2xl font-bold text-gray-900">{data.summary.winRate.toFixed(1)}%</span></div>
+                    </div>
+                </div>
+
+                {/* Charts */}
+                <div className="flex gap-4 h-[300px]">
                     <div className="flex-1 border rounded-lg p-4">
                         <h3 className="font-bold mb-4 text-gray-700">資產成長趨勢 ({currencyMode})</h3>
                         <div style={{width:'750px', height:'240px'}}>
@@ -878,19 +946,21 @@ const PdfTemplate = ({ data, selectedPortfolio, exchangeRate, currencyMode }: an
                 </div>
             </div>
             
-            <div className="w-[1280px] min-h-[900px] p-[60px] bg-white mb-5 relative box-border">
+            {/* Page 2: Holdings */}
+            <div className="pdf-page w-[1280px] min-h-[900px] p-[60px] pb-20 bg-white mb-5 relative box-border">
                  <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-gray-800">個別資產明細 (Holdings)</h2></div>
                  <div className="border rounded-lg overflow-hidden">
                     <table className="w-full text-sm text-left whitespace-nowrap"><thead className="bg-gray-50 font-bold text-gray-600"><tr><th className="p-3">代號</th><th className="p-3 text-right">股數</th><th className="p-3 text-right">現價(原幣)</th><th className="p-3 text-right">總市值(TWD)</th><th className="p-3 text-right">總市值(USD)</th><th className="p-3 text-right">報酬率</th></tr></thead><tbody>{pdfHoldings.map((h, i) => (<tr key={i} className="border-t border-gray-100"><td className="p-3 font-bold">{h.symbol}</td><td className="p-3 text-right">{h.shares.toFixed(2)}</td><td className="p-3 text-right">{h.currency==='TWD'?'NT$':'$'}{h.currentPrice.toFixed(2)}</td><td className="p-3 text-right">{formatValue(h.value, 'TWD', exchangeRate)}</td><td className="p-3 text-right text-gray-500">{formatValue(h.value, 'USD', exchangeRate)}</td><td className={\`p-3 text-right font-bold \${h.returnPcnt>=0?'text-red-600':'text-green-600'}\`}>{h.returnPcnt.toFixed(2)}%</td></tr>))}</tbody></table>
                 </div>
             </div>
 
+            {/* Page 3+: Transactions (Current Year Only) */}
             {pages.length > 0 ? pages.map((chunk, idx) => (
-                <div key={idx} className="w-[1280px] min-h-[900px] p-[60px] bg-white mb-5 relative box-border">
+                <div key={idx} className="pdf-page w-[1280px] min-h-[900px] p-[60px] pb-20 bg-white mb-5 relative box-border">
                     <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-gray-800">{currentYear} 年度交易紀錄</h2><span className="bg-gray-100 px-3 py-1 rounded text-sm text-gray-600">頁 {idx + 3}</span></div>
                     <table className="w-full text-sm text-left border rounded-lg overflow-hidden whitespace-nowrap"><thead className="bg-gray-50 font-bold text-gray-600"><tr><th className="p-4 border-b">日期</th><th className="p-4 border-b">類型</th><th className="p-4 border-b">標的</th><th className="p-4 border-b text-right">股數</th><th className="p-4 border-b text-right">單價</th><th className="p-4 border-b text-right">總額(USD)</th><th className="p-4 border-b text-right">總額(TWD)</th></tr></thead><tbody>{chunk.map((t: any, ti: number) => (<tr key={ti} className="border-b last:border-0 hover:bg-gray-50"><td className="p-4 text-gray-600">{t.date.split('T')[0]}</td><td className="p-4"><span className={\`px-2 py-1 rounded text-xs font-bold \${t.type==='Buy'?'bg-red-100 text-red-700':t.type.includes('Sell')?'bg-green-100 text-green-700':'bg-blue-100 text-blue-700'}\`}>{t.type}</span></td><td className="p-4 font-bold">{t.symbol}</td><td className="p-4 text-right font-mono">{parseFloat(t.shares).toFixed(2)}</td><td className="p-4 text-right font-mono">{t.currency === 'TWD' ? 'NT$' : '$'}{parseFloat(t.price).toFixed(2)}</td><td className="p-4 text-right font-mono font-bold">{t.currency === 'USD' ? '$' : ''}{t.amount ? Math.abs(t.amount).toLocaleString(undefined, {minimumFractionDigits:2}) : '-'}</td><td className="p-4 text-right font-mono font-bold text-gray-500">{t.amount ? formatValue(Math.abs(t.amount), 'TWD', exchangeRate) : '-'}</td></tr>))}</tbody></table>
                 </div>
-            )) : <div className="w-[1280px] min-h-[900px] p-[60px] bg-white flex items-center justify-center border-2 border-dashed"><p className="text-gray-400 text-xl">本年度尚無交易紀錄</p></div>}
+            )) : <div className="pdf-page w-[1280px] min-h-[900px] p-[60px] bg-white flex items-center justify-center border-2 border-dashed"><p className="text-gray-400 text-xl">本年度尚無交易紀錄</p></div>}
         </div>
     );
 };
@@ -945,14 +1015,16 @@ export default function Dashboard() {
             setIsLoading(true);
             try {
                 // Determine earliest date for API fetching
-                const earliestDate = transactions.reduce((min, t) => t.date < min ? t.date : min, transactions[0].date);
+                // FIX: Subtract buffer days to ensure we catch prior close prices even if transaction is on a holiday/weekend
+                const earliestDate = new Date(transactions.reduce((min, t) => t.date < min ? t.date : min, transactions[0].date));
+                earliestDate.setDate(earliestDate.getDate() - 7); 
 
                 const res = await fetch('/api/market-data', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         symbols, 
-                        startDate: earliestDate 
+                        startDate: earliestDate.toISOString() 
                     })
                 });
                 
@@ -1034,17 +1106,27 @@ export default function Dashboard() {
         try {
             const doc = new jsPDF('l', 'pt', 'a4');
             const container = document.getElementById('pdf-hidden-zone');
+            // Fix: Now we can properly select .pdf-page elements
             const pages = container?.querySelectorAll('.pdf-page');
-            if (pages) {
+            
+            if (pages && pages.length > 0) {
                 for (let i = 0; i < pages.length; i++) {
                     if (i > 0) doc.addPage();
-                    const canvas = await html2canvas(pages[i] as HTMLElement, { scale: 2, logging: false, useCORS: true });
+                    const canvas = await html2canvas(pages[i] as HTMLElement, { 
+                        scale: 2, 
+                        logging: false, 
+                        useCORS: true,
+                        allowTaint: true,
+                        backgroundColor: '#ffffff'
+                    });
                     const imgData = canvas.toDataURL('image/jpeg', 1.0);
                     const pdfWidth = doc.internal.pageSize.getWidth();
                     const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
                     doc.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
                 }
                 doc.save(\`\${selectedPortfolio}_Report.pdf\`);
+            } else {
+                console.error("No pages found to generate PDF");
             }
         } catch (e: any) {
             alert('PDF Error: ' + e.message);

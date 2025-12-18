@@ -36,11 +36,11 @@ export const formatValue = (val: number | undefined, currency: string, exchangeR
   const rate = currency === 'TWD' ? exchangeRate : 1;
   const convertedVal = val * rate;
   const symbol = currency === 'TWD' ? 'NT$' : '$';
-  
+   
   if (isInt) {
       return `${symbol}${Math.floor(convertedVal).toLocaleString()}`;
   }
-  
+   
   return `${symbol}${convertedVal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
 };
 

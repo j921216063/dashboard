@@ -61,9 +61,13 @@ export const parseCSV = (csvText: string): Transaction[] => {
 
         if (entry['Transaction Date'] && entry['Symbol'] && !entry['Symbol'].includes('CASH')) {
             const type = entry['Type'] || 'Other';
-            const shares = parseFloat(entry['Shares Owned'] || '0');
-            const price = parseFloat(entry['Cost Per Share'] || '0');
-            const commission = parseFloat(entry['Commission'] || '0');
+            // Fix: remove $ and , from numbers to prevent parsing errors
+            const cleanNumber = (val: string) => parseFloat(val ? val.replace(/[$,]/g, '') : '0');
+            
+            const shares = cleanNumber(entry['Shares Owned']);
+            const price = cleanNumber(entry['Cost Per Share']);
+            const commission = cleanNumber(entry['Commission']);
+            
             const currency = entry['Currency'] || 'USD';
             let amount = 0;
             
@@ -110,15 +114,22 @@ export const processPortfolioData = (
         priceLookup[sym] = new Map(marketData[sym].map(d => [d.date, d.price])); 
     });
 
-    const startDate = new Date(filteredTx[0].date);
-    const endDate = new Date(); 
+    // FIX: Set startDate to the VERY END of the first transaction day (23:59:59.999).
+    // Using UTC construction ensures we don't get shifted to the previous day due to timezone offsets.
+    const firstTxDate = new Date(filteredTx[0].date);
+    const startDate = new Date(firstTxDate);
+    startDate.setUTCHours(23, 59, 59, 999);
+    
+    const now = new Date();
+    const endDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+
     const chartData: ChartDataPoint[] = [];
     let currentDate = new Date(startDate);
     
     let txIndex = 0;
     const lastKnownPrices: Record<string, number> = {};
 
-    while (currentDate <= endDate) {
+    while (currentDate.getTime() <= endDate.getTime()) {
         const currentDateTs = currentDate.getTime();
         const dateStr = currentDate.toISOString().split('T')[0];
 
@@ -130,10 +141,13 @@ export const processPortfolioData = (
                 currencyMap[tx.symbol] = tx.currency; 
             }
             
-            // Fix: Initialize lastKnownPrice with transaction price if unknown
-            // This prevents 0 value drop when market data is missing for the transaction day
-            if (lastKnownPrices[tx.symbol] === undefined && tx.price > 0) {
+            // Critical: Always cache the transaction price immediately.
+            // This ensures that even if market data is missing for this day, we have a price baseline.
+            if (tx.price > 0) {
                 lastKnownPrices[tx.symbol] = tx.price;
+            } else if (Math.abs(tx.amount) > 0 && tx.shares > 0) {
+                // Derived price fallback if price column was empty but amount existed
+                lastKnownPrices[tx.symbol] = Math.abs(tx.amount) / tx.shares;
             }
 
             if (tx.type === 'Buy') {
@@ -161,18 +175,46 @@ export const processPortfolioData = (
             const shares = holdingsMap[sym];
             if (shares > 0.0001) {
                 let price = 0;
+                
+                // Priority 1: User Override
                 if (priceOverrides[sym]) {
                     price = priceOverrides[sym];
-                } else {
+                } 
+                else {
+                    // Priority 2: Market Data
                     const lookupPrice = priceLookup[sym]?.get(dateStr);
-                    if (lookupPrice !== undefined) lastKnownPrices[sym] = lookupPrice;
+                    if (lookupPrice && lookupPrice > 0) {
+                        lastKnownPrices[sym] = lookupPrice;
+                    }
+                    
+                    // Priority 3: Last Known Price
                     price = lastKnownPrices[sym] || 0;
                 }
+
+                // Priority 4: Average Cost Fallback (CRITICAL FIX: Ensure this runs if price is 0)
+                if (price <= 0 && costBasisMap[sym] > 0 && shares > 0) {
+                    price = costBasisMap[sym] / shares;
+                    lastKnownPrices[sym] = price; // Update cache
+                }
+
                 dailyValue += shares * price;
             }
         });
 
-        if (dailyValue > 0 || totalInvested > 0) {
+        if (dailyValue <= 0.001 && totalInvested > 0) {
+            // Safety: Force value = invested if value is anomalously zero to prevent -100% spikes
+            // This happens if price lookup fails completely for the very first day
+            const safeValue = totalInvested;
+            
+            chartData.push({ 
+                date: dateStr, 
+                rawDate: new Date(currentDate), 
+                value: safeValue, 
+                invested: totalInvested,
+                returnAbs: 0,
+                returnPct: 0
+            });
+        } else if (dailyValue > 0 || totalInvested > 0) {
             chartData.push({ 
                 date: dateStr, 
                 rawDate: new Date(currentDate), 
@@ -182,7 +224,8 @@ export const processPortfolioData = (
                 returnPct: totalInvested > 0 ? (dailyValue - totalInvested) / totalInvested * 100 : 0
             });
         }
-        currentDate.setDate(currentDate.getDate() + 1);
+        // Increment by 1 UTC day
+        currentDate.setUTCDate(currentDate.getUTCDate() + 1);
     }
 
     const currentHoldings: Holding[] = [];
@@ -192,6 +235,12 @@ export const processPortfolioData = (
         const shares = holdingsMap[sym];
         if (shares > 0.001) {
             let price = priceOverrides[sym] ? priceOverrides[sym] : (lastKnownPrices[sym] || 0);
+            
+            // Fix: Apply Avg Cost fallback for Current Holdings table as well!
+            if (price <= 0 && costBasisMap[sym] > 0 && shares > 0) {
+                price = costBasisMap[sym] / shares;
+            }
+
             const val = shares * price;
             currentTotalValue += val;
             currentHoldings.push({
