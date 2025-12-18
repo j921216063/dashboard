@@ -28,7 +28,7 @@ export interface Holding {
   currency: string;
   returnPcnt: number;
   avgCost: number;
-  costBasis: number; // Added for internal calculation
+  costBasis: number;
   isOverridden?: boolean;
 }
 

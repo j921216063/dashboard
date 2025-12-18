@@ -2,24 +2,11 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { Icons, formatValue, formatUSD, formatMoney, formatInt, COLORS } from '@/lib/utils';
+import { Icons, formatValue, formatUSD, formatMoney, formatInt, COLORS, DEFAULT_CSV_DATA } from '@/lib/utils';
 import { parseCSV, processPortfolioData } from '@/lib/finance';
 import { ProcessedData, MarketDataMap } from '@/types';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-
-const DEFAULT_CSV_DATA = `Id,Symbol,Name,Display Symbol,Exchange,Portfolio,Currency,Shares Owned,Cost Per Share,Commission,Transaction Date,Transaction Time,Purchase Exchange Rate,Type,Accounting,Accounting Execution Ids,Notes
-"1","IMOM","Alpha Architect International Q",,"NGM","Firstrade 帳戶","USD","143","27.97","0","2024-02-16 GMT+0800","21:47:00",,"Buy",,,
-"6","AVUV","Avantis U.S. Small Cap Value ET",,"PCX","Firstrade 帳戶","USD","41","88.6","0","2024-02-16 GMT+0800","22:28:00",,"Buy",,,
-"14","QVAL","Alpha Architect U.S. Quantitati",,"NGM","Firstrade 帳戶","USD","85","41.16","0","2024-02-16 GMT+0800","22:36:00",,"Buy",,,
-"22","VTI","Vanguard Total Stock Market ETF",,"PCX","Firstrade 帳戶","USD","48","249.67","0","2024-02-16 GMT+0800","22:44:00",,"Buy",,,
-"30","QMOM","Alpha Architect U.S. Quantitati",,"NGM","Firstrade 帳戶","USD","88","54.96","0","2024-02-16 GMT+0800","22:46:00",,"Buy",,,
-"36","AVES","Avantis Emerging Markets Value ",,"PCX","Firstrade 帳戶","USD","38","46.68","0","2024-02-20 GMT+0800","22:46:00",,"Buy",,,
-"42","IVAL","Alpha Architect International Q",,"NGM","Firstrade 帳戶","USD","86","25.77","0","2024-02-20 GMT+0800","22:47:00",,"Buy",,,
-"50","VXUS","Vanguard Total International St",,"NGM","Firstrade 帳戶","USD","176","58.25","0","2024-02-20 GMT+0800","22:48:00",,"Buy",,,
-"58","AVDV","Avantis International Small Cap",,"PCX","Firstrade 帳戶","USD","36","61.5","0","2024-02-20 GMT+0800","22:49:00",,"Buy",,,
-"72","VT","Vanguard Total World Stock Inde",,"PCX","美股VT三人組","USD","10.45569","102.34","3.21","2022-02-22 GMT+0800","23:49:00",,"Buy",,,
-`;
 
 const MetricCard = ({ title, value, subValue, trend }: any) => {
     const isUp = trend === 'up';
@@ -177,17 +164,13 @@ export default function Dashboard() {
     const [sortConfig, setSortConfig] = useState({ key: 'value', direction: 'desc' });
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // 1. Parse Data
     const transactions = useMemo(() => parseCSV(rawData || ''), [rawData]);
     const portfolios = useMemo(() => Array.from(new Set(transactions.map(t => t.portfolio))), [transactions]);
 
     useEffect(() => {
-        if (portfolios.length > 0 && !selectedPortfolio) {
-            setSelectedPortfolio(portfolios[0]);
-        }
+        if (portfolios.length > 0 && !selectedPortfolio) setSelectedPortfolio(portfolios[0]);
     }, [portfolios, selectedPortfolio]);
 
-    // 2. Fetch Real Market Data
     useEffect(() => {
         const fetchData = async () => {
             if (transactions.length === 0) return;
@@ -197,12 +180,15 @@ export default function Dashboard() {
 
             setIsLoading(true);
             try {
+                // Determine earliest date for API fetching
+                const earliestDate = transactions.reduce((min, t) => t.date < min ? t.date : min, transactions[0].date);
+
                 const res = await fetch('/api/market-data', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         symbols, 
-                        startDate: transactions[0].date 
+                        startDate: earliestDate 
                     })
                 });
                 
@@ -223,13 +209,11 @@ export default function Dashboard() {
         fetchData();
     }, [transactions]);
 
-    // 3. Process Data
     const data = useMemo(() => {
         if (Object.keys(marketData).length === 0 || !selectedPortfolio) return null;
         return processPortfolioData(transactions, marketData, selectedPortfolio, priceOverrides);
     }, [marketData, selectedPortfolio, transactions, priceOverrides]);
 
-    // Filter & Transform Chart
     const filteredChartData = useMemo(() => {
         if (!data || !data.chartData) return [];
         const now = new Date(); // Real date
@@ -445,7 +429,7 @@ export default function Dashboard() {
                                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                         <XAxis dataKey="date" minTickGap={50} tick={{fontSize: 12, fill: '#64748b'}} tickLine={false} axisLine={false} />
                                         <YAxis tick={{fontSize: 12, fill: '#64748b'}} tickFormatter={v => `${v/1000}k`} tickLine={false} axisLine={false} />
-                                        <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val: number) => [formatValue(val, currencyMode, 1, true), '']} />
+                                        <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val) => [formatValue(val, currencyMode, 1, true), '']} />
                                         <Legend iconType="circle" />
                                         <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} fillOpacity={0.1} fill="#3b82f6" name="資產市值" />
                                         <Area type="monotone" dataKey="invested" stroke="#10b981" strokeWidth={2} strokeDasharray="5 5" fillOpacity={0} name="淨成本" />
@@ -455,7 +439,7 @@ export default function Dashboard() {
                                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                         <XAxis dataKey="date" minTickGap={50} tick={{fontSize: 12, fill: '#64748b'}} tickLine={false} axisLine={false} />
                                         <YAxis tick={{fontSize: 12, fill: '#64748b'}} tickFormatter={v => `${v/1000}k`} tickLine={false} axisLine={false} />
-                                        <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val: number) => [formatValue(val, currencyMode, 1, true), '']} />
+                                        <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val) => [formatValue(val, currencyMode, 1, true), '']} />
                                         <Legend iconType="circle" />
                                         <Area type="monotone" dataKey="returnAbs" stroke="#10b981" fill="#10b981" fillOpacity={0.1} strokeWidth={2} name="總損益金額" />
                                     </AreaChart>
@@ -464,7 +448,7 @@ export default function Dashboard() {
                                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                         <XAxis dataKey="date" minTickGap={50} tick={{fontSize: 12, fill: '#64748b'}} tickLine={false} axisLine={false} />
                                         <YAxis tick={{fontSize: 12, fill: '#64748b'}} tickFormatter={v => `${v}%`} tickLine={false} axisLine={false} />
-                                        <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val: number) => [`${val.toFixed(2)}%`, '']} />
+                                        <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val) => [`${val.toFixed(2)}%`, '']} />
                                         <Legend iconType="circle" />
                                         <Line type="monotone" dataKey="returnPct" stroke="#f59e0b" strokeWidth={2} dot={false} name="損益幅度 %" />
                                     </LineChart>
@@ -490,7 +474,7 @@ export default function Dashboard() {
                                     >
                                         {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} stroke="none" />)}
                                     </Pie>
-                                    <Tooltip formatter={(val: number, name: string, props: any) => [`${formatValue(val, currencyMode, exchangeRate, true)} (${(props.payload.percent * 100).toFixed(1)}%)`, name]} contentStyle={{borderRadius: '8px', border:'none', boxShadow:'0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
+                                    <Tooltip formatter={(val, name, props) => [`${formatValue(val, currencyMode, exchangeRate, true)} (${(props.payload.percent * 100).toFixed(1)}%)`, name]} contentStyle={{borderRadius: '8px', border:'none', boxShadow:'0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
                                 </PieChart>
                             </ResponsiveContainer>
                         </div>

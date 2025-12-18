@@ -12,7 +12,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid symbols' }, { status: 400 });
     }
 
-    const uniqueSymbols = Array.from(new Set(symbols as string[]));
+    // Polyfill for Node.js < 18.14.1
+    if (typeof Headers !== 'undefined' && !Headers.prototype.getSetCookie) {
+      Headers.prototype.getSetCookie = function() {
+        const val = this.get('set-cookie');
+        return val ? [val] : [];
+      };
+    }
+
+    const uniqueSymbols = Array.from(new Set(symbols));
     const period1 = startDate ? new Date(startDate) : new Date('2015-01-01');
     const marketData: MarketDataMap = {};
 
@@ -22,14 +30,14 @@ export async function POST(request: Request) {
       uniqueSymbols.map(async (symbol) => {
         try {
           const queryOptions = { period1: period1, interval: '1d' as const };
-          const quote = await yahooFinance.historical(symbol, queryOptions);
-          marketData[symbol] = quote.map((q) => ({
+          const quote = await yahooFinance.historical(symbol as string, queryOptions);
+          marketData[symbol as string] = quote.map((q) => ({
             date: q.date.toISOString().split('T')[0],
             price: q.adjClose || q.close,
           }));
         } catch (error) {
           console.error(`Error fetching ${symbol}:`, error);
-          marketData[symbol] = [];
+          marketData[symbol as string] = [];
         }
       })
     );
