@@ -568,12 +568,43 @@ export const parseCSV = (csvText: string): Transaction[] => {
                 amount = ((shares * price) - commission);
             }
 
+            // Safe Date Parsing for Mobile (Safari)
+            let isoDate = '';
+            try {
+                let dateStr = entry['Transaction Date'];
+                // Try simple date string if present
+                if (dateStr && dateStr.includes('GMT')) {
+                    // Some mobile browsers fail on GMT offsets without standard format
+                    // Fallback: try taking just the date part YYYY-MM-DD
+                    const simpleDate = dateStr.split(' ')[0];
+                    const d = new Date(simpleDate);
+                    if (!isNaN(d.getTime())) {
+                        isoDate = d.toISOString();
+                    } else {
+                        // Retry original
+                        const fullD = new Date(dateStr);
+                        if (!isNaN(fullD.getTime())) {
+                            isoDate = fullD.toISOString();
+                        } else {
+                            throw new Error('Invalid Date');
+                        }
+                    }
+                } else {
+                    const d = new Date(dateStr);
+                    if (isNaN(d.getTime())) throw new Error('Invalid Date');
+                    isoDate = d.toISOString();
+                }
+            } catch (e) {
+                console.warn('Skipping invalid date:', entry['Transaction Date']);
+                continue;
+            }
+
             data.push({
                 id: i.toString(),
                 symbol: entry['Symbol'],
                 portfolio: entry['Portfolio'] || 'Default',
                 currency, shares, price, commission,
-                date: new Date(entry['Transaction Date']).toISOString(),
+                date: isoDate,
                 type: type as any, amount
             });
         }
