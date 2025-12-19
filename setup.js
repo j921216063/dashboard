@@ -39,7 +39,8 @@ const packageJson = `
     "jspdf": "^2.5.1",
     "clsx": "^2.1.0",
     "tailwind-merge": "^2.2.1",
-    "lz-string": "^1.5.0"
+    "lz-string": "^1.5.0",
+    "dayjs": "^1.11.10"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -495,6 +496,10 @@ export const DEFAULT_CSV_DATA = \`Id,Symbol,Name,Display Symbol,Exchange,Portfol
 
 const libFinance = `
 import { Transaction, MarketDataMap, ProcessedData, PortfolioSummary, ChartDataPoint, Holding } from '@/types';
+import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
+
+dayjs.extend(customParseFormat);
 
 // --- Math Helpers ---
 const xirr = (transactions: { amount: number; date: Date }[], currentValue: number, valuationDate: Date) => {
@@ -544,28 +549,14 @@ const vol = (returns: number[]) => {
 const safeParseDate = (dateStr: string): string | null => {
     if (!dateStr) return null;
 
-    try {
-        // 1. Try ISO string directly
-        let d = new Date(dateStr);
-        if (!isNaN(d.getTime())) return d.toISOString();
-
-        // 2. Handle "YYYY-MM-DD GMT+..." format (Common in CSVs)
-        // Remove timezone info which confuses Safari
-        const cleanStr = dateStr.split(' GMT')[0].trim();
-        
-        // 3. Replace dashes with slashes (Safari often prefers YYYY/MM/DD)
-        const slashStr = cleanStr.replace(/-/g, '/');
-        d = new Date(slashStr);
-        if (!isNaN(d.getTime())) return d.toISOString();
-
-        // 4. Try parsing just the date part if time exists
-        const justDate = cleanStr.split(' ')[0].replace(/-/g, '/');
-        d = new Date(justDate);
-        if (!isNaN(d.getTime())) return d.toISOString();
-
-    } catch (e) {
-        // Fallthrough
-    }
+    // Remove "GMT" garbage which confuses Safari
+    // Example: "2024-02-16 GMT+0800" -> "2024-02-16"
+    // Also handle "2024/02/16"
+    let clean = dateStr.replace(/GMT([+-]\\d{4})?/, '').trim();
+    
+    const d = dayjs(clean);
+    if (d.isValid()) return d.toISOString();
+    
     return null;
 };
 

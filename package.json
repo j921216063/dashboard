@@ -18,7 +18,8 @@
     "jspdf": "^2.5.1",
     "clsx": "^2.1.0",
     "tailwind-merge": "^2.2.1",
-    "lz-string": "^1.5.0"
+    "lz-string": "^1.5.0",
+    "dayjs": "^1.11.10"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
