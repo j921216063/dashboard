@@ -34,7 +34,7 @@ export interface Holding {
 
 export interface ChartDataPoint {
   date: string;
-  rawDate: Date;
+  rawDate: number;
   value: number;
   invested: number;
   returnAbs: number;

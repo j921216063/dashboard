@@ -8,6 +8,7 @@ import { ProcessedData, MarketDataMap, Transaction } from '@/types';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import LZString from 'lz-string';
+import dayjs from 'dayjs';
 
 const generateSharedCSV = (txs: Transaction[]) => {
   let csv = "Id,Symbol,Portfolio,Currency,Shares Owned,Cost Per Share,Commission,Transaction Date,Type,Amount\n";
@@ -72,10 +73,10 @@ const ShareModal = ({ isOpen, onClose, url }: any) => {
 
 const PdfTemplate = ({ data, selectedPortfolio, exchangeRate, currencyMode }: any) => {
     if (!data) return null;
-    const currentYear = new Date().getFullYear();
+    const currentYear = dayjs().year();
     const yearTxs = data.transactions
-        .filter((t: any) => new Date(t.date).getFullYear() === currentYear)
-        .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        .filter((t: any) => dayjs(t.date).year() === currentYear)
+        .sort((a: any, b: any) => dayjs(b.date).valueOf() - dayjs(a.date).valueOf());
 
     const pages = [];
     for (let i = 0; i < yearTxs.length; i += 15) pages.push(yearTxs.slice(i, i + 15));
@@ -105,7 +106,7 @@ const PdfTemplate = ({ data, selectedPortfolio, exchangeRate, currencyMode }: an
             <div className="pdf-page w-[1280px] min-h-[900px] p-[60px] pb-20 bg-white mb-5 relative box-border">
                 <div className="flex justify-between items-end border-b-2 border-blue-600 pb-4 mb-6">
                     <div><h1 className="text-3xl font-extrabold text-gray-900">{selectedPortfolio}</h1><p className="text-gray-500 mt-1">年度投資績效報告 (Dashboard View)</p></div>
-                    <div className="text-right"><p className="text-sm text-gray-400">製表日期</p><p className="font-bold">{new Date().toLocaleDateString()}</p></div>
+                    <div className="text-right"><p className="text-sm text-gray-400">製表日期</p><p className="font-bold">{dayjs().format('YYYY/MM/DD')}</p></div>
                 </div>
                 
                 {/* Metric Cards */}
@@ -260,13 +261,13 @@ export default function Dashboard() {
 
             setIsLoading(true);
             try {
-                const earliestDate = new Date(transactions.reduce((min, t) => t.date < min ? t.date : min, transactions[0].date));
-                earliestDate.setDate(earliestDate.getDate() - 7); 
+                const minDateStr = transactions.reduce((min, t) => t.date < min ? t.date : min, transactions[0].date);
+                const earliestDate = dayjs(minDateStr).subtract(7, 'day').toISOString();
 
                 const res = await fetch('/api/market-data', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ symbols, startDate: earliestDate.toISOString() })
+                    body: JSON.stringify({ symbols, startDate: earliestDate })
                 });
                 if (!res.ok) throw new Error('API Failed');
                 const json = await res.json();
@@ -321,16 +322,19 @@ export default function Dashboard() {
     // ... (Keep existing chart data logic: filteredChartData, sortedHoldings) ...
     const filteredChartData = useMemo(() => {
         if (!data || !data.chartData) return [];
-        const now = new Date();
+        const now = dayjs();
         const points = data.chartData;
-        let cutoffDate;
-        if (timeRange === 'YTD') cutoffDate = new Date(now.getFullYear(), 0, 1);
-        else if (timeRange === '1Y') cutoffDate = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
-        else if (timeRange === '3Y') cutoffDate = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
-        else if (timeRange === '5Y') cutoffDate = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
-        else if (timeRange === '10Y') cutoffDate = new Date(now.getFullYear() - 10, now.getMonth(), now.getDate());
-        const filtered = timeRange === 'ALL' ? points : points.filter(p => p.rawDate >= (cutoffDate || new Date(0)));
+        let cutoffDate = dayjs(0); // Default epoch
+        
+        if (timeRange === 'YTD') cutoffDate = now.startOf('year');
+        else if (timeRange === '1Y') cutoffDate = now.subtract(1, 'year');
+        else if (timeRange === '3Y') cutoffDate = now.subtract(3, 'year');
+        else if (timeRange === '5Y') cutoffDate = now.subtract(5, 'year');
+        else if (timeRange === '10Y') cutoffDate = now.subtract(10, 'year');
+        
+        const filtered = timeRange === 'ALL' ? points : points.filter(p => dayjs(p.rawDate).isAfter(cutoffDate));
         const rate = currencyMode === 'TWD' ? exchangeRate : 1;
+        
         return filtered.map(p => ({ ...p, value: p.value * rate, invested: p.invested * rate, returnAbs: p.returnAbs * rate }));
     }, [data, timeRange, currencyMode, exchangeRate]);
 
@@ -480,7 +484,7 @@ export default function Dashboard() {
                                 </>
                             )}
                         </div>
-                        <p className="text-gray-500 text-sm">投資組合深度分析報告 • 結算日 {new Date().toLocaleDateString()}</p>
+                        <p className="text-gray-500 text-sm">投資組合深度分析報告 • 結算日 {dayjs().format('YYYY/MM/DD')}</p>
                     </div>
                 </div>
 

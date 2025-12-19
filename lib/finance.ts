@@ -5,12 +5,18 @@ import customParseFormat from 'dayjs/plugin/customParseFormat';
 dayjs.extend(customParseFormat);
 
 // --- Math Helpers ---
-const xirr = (transactions: { amount: number; date: Date }[], currentValue: number, valuationDate: Date) => {
+const xirr = (transactions: { amount: number; date: string }[], currentValue: number, valuationDate: string) => {
     try {
         const cashFlows = [...transactions];
         cashFlows.push({ amount: currentValue, date: valuationDate });
-        const t0 = cashFlows[0].date.getTime();
-        const xnpv = (r: number) => cashFlows.reduce((acc, cf) => acc + cf.amount / Math.pow(1 + r, (cf.date.getTime() - t0) / 31536000000), 0);
+        
+        const t0 = dayjs(cashFlows[0].date).valueOf();
+        
+        const xnpv = (r: number) => cashFlows.reduce((acc, cf) => {
+            const dt = (dayjs(cf.date).valueOf() - t0) / 31536000000;
+            return acc + cf.amount / Math.pow(1 + r, dt);
+        }, 0);
+
         let rate = 0.1;
         for(let i=0; i<50; i++) {
             const v = xnpv(rate);
@@ -51,14 +57,9 @@ const vol = (returns: number[]) => {
 // --- Date Parsing Helper ---
 const safeParseDate = (dateStr: string): string | null => {
     if (!dateStr) return null;
-
-    // Remove "GMT" garbage which confuses Safari
     let clean = dateStr.replace(/GMT([+-]\d{4})?/, '').trim();
-    
-    // Try dayjs first
     const d = dayjs(clean);
     if (d.isValid()) return d.toISOString();
-    
     return null;
 };
 
@@ -94,7 +95,6 @@ export const parseCSV = (csvText: string): Transaction[] => {
                 amount = ((shares * price) - commission);
             }
 
-            // Safe Date Parsing for Mobile (Safari)
             const isoDate = safeParseDate(entry['Transaction Date']);
             
             if (isoDate) {
@@ -106,8 +106,6 @@ export const parseCSV = (csvText: string): Transaction[] => {
                     date: isoDate,
                     type: type as any, amount
                 });
-            } else {
-                console.warn('Skipping invalid date:', entry['Transaction Date']);
             }
         }
     }
@@ -131,7 +129,9 @@ export const processPortfolioData = (
     const costBasisMap: Record<string, number> = {}; 
     const currencyMap: Record<string, string> = {};
     let totalInvested = 0; 
-    const xirrFlows: { amount: number; date: Date }[] = []; 
+    
+    const xirrFlows: { amount: number; date: string }[] = []; 
+    
     const priceLookup: Record<string, Map<string, number>> = {};
     
     Object.keys(marketData).forEach(sym => { 
@@ -141,16 +141,13 @@ export const processPortfolioData = (
     const firstTxDate = dayjs(filteredTx[0].date);
     if (!firstTxDate.isValid()) return null;
 
-    // Set start date to the END of the first transaction day to ensure Day 1 inclusion
     let currentDate = firstTxDate.hour(23).minute(59).second(59).millisecond(999);
-    
     const now = dayjs().hour(23).minute(59).second(59).millisecond(999);
     
     const chartData: ChartDataPoint[] = [];
     let txIndex = 0;
     const lastKnownPrices: Record<string, number> = {};
 
-    // Loop protection
     let loopCount = 0;
     const MAX_LOOPS = 365 * 50; 
 
@@ -178,7 +175,7 @@ export const processPortfolioData = (
                 holdingsMap[tx.symbol] += tx.shares;
                 costBasisMap[tx.symbol] += Math.abs(tx.amount);
                 totalInvested += Math.abs(tx.amount);
-                xirrFlows.push({ amount: tx.amount, date: dayjs(tx.date).toDate() });
+                xirrFlows.push({ amount: tx.amount, date: tx.date });
             } else if (tx.type.includes('Sell') || tx.type === 'Sell All') {
                  if (holdingsMap[tx.symbol] > 0) {
                      const ratio = tx.shares / holdingsMap[tx.symbol];
@@ -187,7 +184,7 @@ export const processPortfolioData = (
                      totalInvested -= costRemoved;
                      holdingsMap[tx.symbol] -= tx.shares;
                  }
-                 xirrFlows.push({ amount: tx.amount, date: dayjs(tx.date).toDate() });
+                 xirrFlows.push({ amount: tx.amount, date: tx.date });
             } else if (tx.type === 'Dividend Reinvest') {
                 holdingsMap[tx.symbol] += tx.shares;
             }
@@ -224,7 +221,7 @@ export const processPortfolioData = (
             const safeValue = totalInvested;
             chartData.push({ 
                 date: dateStr, 
-                rawDate: currentDate.toDate(), 
+                rawDate: currentDateTs, 
                 value: safeValue, 
                 invested: totalInvested,
                 returnAbs: 0,
@@ -233,7 +230,7 @@ export const processPortfolioData = (
         } else if (dailyValue > 0 || totalInvested > 0) {
             chartData.push({ 
                 date: dateStr, 
-                rawDate: currentDate.toDate(), 
+                rawDate: currentDateTs,
                 value: dailyValue, 
                 invested: totalInvested,
                 returnAbs: dailyValue - totalInvested,
@@ -284,7 +281,7 @@ export const processPortfolioData = (
         totalCost: totalInvested,
         totalReturn: currentTotalValue - totalInvested,
         returnPcnt: totalInvested > 0 ? ((currentTotalValue - totalInvested) / totalInvested) * 100 : 0,
-        annualizedReturn: xirr(xirrFlows, currentTotalValue, dayjs().toDate()),
+        annualizedReturn: xirr(xirrFlows, currentTotalValue, dayjs().toISOString()),
         maxDrawdown: mdd(chartValues),
         sharpeRatio: sharpe(returns),
         volatility: vol(returns),

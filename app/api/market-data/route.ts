@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import yahooFinance from 'yahoo-finance2';
 import { MarketDataMap } from '@/types';
+import dayjs from 'dayjs';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,7 +22,7 @@ export async function POST(request: Request) {
     }
 
     const uniqueSymbols = Array.from(new Set(symbols));
-    const period1 = startDate ? new Date(startDate) : new Date('2015-01-01');
+    const period1 = startDate ? dayjs(startDate).toDate() : dayjs('2015-01-01').toDate();
     const marketData: MarketDataMap = {};
 
     console.log(`Fetching data for: ${uniqueSymbols.join(', ')}`);
@@ -32,8 +33,7 @@ export async function POST(request: Request) {
           const queryOptions = { period1: period1, interval: '1d' as const };
           const quote = await yahooFinance.historical(symbol as string, queryOptions);
           marketData[symbol as string] = quote.map((q) => {
-            // FIX: Safe date parsing for API results
-            const dateStr = q.date.toISOString().split('T')[0];
+            const dateStr = dayjs(q.date).format('YYYY-MM-DD');
             return {
               date: dateStr,
               price: q.adjClose || q.close,
