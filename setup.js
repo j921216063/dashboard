@@ -38,7 +38,8 @@ const packageJson = `
     "html2canvas": "^1.4.1",
     "jspdf": "^2.5.1",
     "clsx": "^2.1.0",
-    "tailwind-merge": "^2.2.1"
+    "tailwind-merge": "^2.2.1",
+    "lz-string": "^1.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -259,6 +260,10 @@ export const Icons = {
   ArrowDown: (p: any) => <SvgIcon path={<path d="m6 9 6 6 6-6"/>} {...p} />,
   RefreshCw: (p: any) => <SvgIcon path={<><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></>} {...p} />,
   DollarSign: (p: any) => <SvgIcon path={<><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>} {...p} />,
+  Share2: (p: any) => <SvgIcon path={<><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></>} {...p} />,
+  Copy: (p: any) => <SvgIcon path={<><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></>} {...p} />,
+  Home: (p: any) => <SvgIcon path={<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>} {...p} />,
+  Link: (p: any) => <SvgIcon path={<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>} {...p} />
 };
 
 // --- Formatters ---
@@ -880,9 +885,18 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { Icons, formatValue, formatUSD, formatMoney, formatInt, COLORS, DEFAULT_CSV_DATA } from '@/lib/utils';
 import { parseCSV, processPortfolioData } from '@/lib/finance';
-import { ProcessedData, MarketDataMap } from '@/types';
+import { ProcessedData, MarketDataMap, Transaction } from '@/types';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import LZString from 'lz-string';
+
+const generateSharedCSV = (txs: Transaction[]) => {
+  let csv = "Id,Symbol,Portfolio,Currency,Shares Owned,Cost Per Share,Commission,Transaction Date,Type,Amount\\n";
+  txs.forEach(t => {
+     csv += \`"\${t.id}","\${t.symbol}","\${t.portfolio}","\${t.currency}","\${t.shares}","\${t.price}","\${t.commission}","\${t.date}","\${t.type}","\${Math.abs(t.amount)}"\\n\`;
+  });
+  return csv;
+};
 
 const MetricCard = ({ title, value, subValue, trend }: any) => {
     const isUp = trend === 'up';
@@ -912,6 +926,26 @@ const PasteModal = ({ isOpen, onClose, onPaste }: any) => {
                 <div className="p-6 border-b border-gray-200 flex justify-between items-center"><h3 className="text-lg font-bold text-gray-900">貼上 CSV 資料</h3><button onClick={onClose}><Icons.X size={20}/></button></div>
                 <div className="p-6 flex-1 overflow-hidden"><textarea className="w-full h-64 p-3 border border-gray-300 rounded-lg font-mono text-xs resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" value={text} onChange={(e)=>setText(e.target.value)} placeholder="請貼上 Firstrade 的 CSV 內容..." /></div>
                 <div className="p-6 border-t bg-gray-50 flex justify-end gap-3"><button onClick={onClose} className="px-4 py-2 text-gray-700 bg-white border rounded-lg hover:bg-gray-100">取消</button><button onClick={()=>{onPaste(text);onClose();setText("")}} disabled={!text.trim()} className="px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50">匯入</button></div>
+            </div>
+        </div>
+    );
+};
+
+const ShareModal = ({ isOpen, onClose, url }: any) => {
+    if (!isOpen) return null;
+    const copyToClipboard = () => {
+        navigator.clipboard.writeText(url);
+        alert("連結已複製！");
+    };
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
+                <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-bold text-gray-900">分享投資組合</h3><button onClick={onClose}><Icons.X size={20}/></button></div>
+                <p className="text-sm text-gray-500 mb-4">此連結將只包含目前選定的投資組合資料。</p>
+                <div className="flex items-center gap-2 bg-gray-100 p-2 rounded-lg border border-gray-200">
+                    <input readOnly value={url} className="bg-transparent flex-1 text-sm outline-none text-gray-600 font-mono" />
+                    <button onClick={copyToClipboard} className="p-2 hover:bg-white rounded-md transition-colors text-blue-600"><Icons.Copy size={18}/></button>
+                </div>
             </div>
         </div>
     );
@@ -1059,52 +1093,72 @@ export default function Dashboard() {
     const [editingSymbol, setEditingSymbol] = useState<string | null>(null);
     const [editValue, setEditValue] = useState("");
     const [sortConfig, setSortConfig] = useState({ key: 'value', direction: 'desc' });
+    
+    // Sharing State
+    const [isSharedMode, setIsSharedMode] = useState(false);
+    const [shareUrl, setShareUrl] = useState("");
+    const [showShareModal, setShowShareModal] = useState(false);
+    
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const transactions = useMemo(() => parseCSV(rawData || ''), [rawData]);
     const portfolios = useMemo(() => Array.from(new Set(transactions.map(t => t.portfolio))), [transactions]);
 
+    // Init from URL Params (State as URL)
     useEffect(() => {
-        if (portfolios.length > 0 && !selectedPortfolio) setSelectedPortfolio(portfolios[0]);
-    }, [portfolios, selectedPortfolio]);
+        if (typeof window === 'undefined') return;
+        const params = new URLSearchParams(window.location.search);
+        const compressedData = params.get('data');
+        const portfolioParam = params.get('portfolio');
 
+        if (compressedData && portfolioParam) {
+            try {
+                // Decompress data
+                const decompressed = LZString.decompressFromEncodedURIComponent(compressedData);
+                if (decompressed) {
+                    setRawData(decompressed);
+                    setSelectedPortfolio(portfolioParam);
+                    setIsSharedMode(true);
+                }
+            } catch (e) {
+                console.error("Failed to decompress shared data", e);
+                alert("無法讀取分享的資料，連結可能已損壞。");
+            }
+        }
+    }, []);
+
+    // Default portfolio selection (only if not shared mode)
+    useEffect(() => {
+        if (!isSharedMode && portfolios.length > 0 && !selectedPortfolio) setSelectedPortfolio(portfolios[0]);
+    }, [portfolios, selectedPortfolio, isSharedMode]);
+
+    // Data Fetching Logic (Same as before)
     useEffect(() => {
         const fetchData = async () => {
             if (transactions.length === 0) return;
-            
             const symbols = Array.from(new Set(transactions.map(t => t.symbol)));
             if(symbols.length === 0) return;
 
             setIsLoading(true);
             try {
-                // Determine earliest date for API fetching
-                // FIX: Subtract buffer days to ensure we catch prior close prices even if transaction is on a holiday/weekend
                 const earliestDate = new Date(transactions.reduce((min, t) => t.date < min ? t.date : min, transactions[0].date));
                 earliestDate.setDate(earliestDate.getDate() - 7); 
 
                 const res = await fetch('/api/market-data', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        symbols, 
-                        startDate: earliestDate.toISOString() 
-                    })
+                    body: JSON.stringify({ symbols, startDate: earliestDate.toISOString() })
                 });
-                
                 if (!res.ok) throw new Error('API Failed');
-                
                 const json = await res.json();
                 setMarketData(json.marketData);
                 if (json.exchangeRate) setExchangeRate(json.exchangeRate);
-                
             } catch (err) {
                 console.error("Fetch error", err);
-                // Fallback or error handling
             } finally {
                 setIsLoading(false);
             }
         };
-
         fetchData();
     }, [transactions]);
 
@@ -1113,27 +1167,52 @@ export default function Dashboard() {
         return processPortfolioData(transactions, marketData, selectedPortfolio, priceOverrides);
     }, [marketData, selectedPortfolio, transactions, priceOverrides]);
 
+    // Handle Share Logic (State as URL)
+    const handleShare = () => {
+        if (!data || !selectedPortfolio) return;
+        
+        // Filter ONLY current portfolio transactions to protect privacy
+        const portfolioTxs = transactions.filter(t => t.portfolio === selectedPortfolio);
+        const csvContent = generateSharedCSV(portfolioTxs);
+        
+        try {
+            // Compress CSV
+            const compressed = LZString.compressToEncodedURIComponent(csvContent);
+            const baseUrl = window.location.origin + window.location.pathname;
+            // Construct URL
+            const url = \`\${baseUrl}?data=\${compressed}&portfolio=\${encodeURIComponent(selectedPortfolio)}\`;
+            
+            // Check length warning (approx 2000 chars is safe limit for some old browsers/proxies, but modern ones handle more)
+            if (url.length > 8000) {
+                alert("警告：資料量過大，生成的連結可能會被某些瀏覽器截斷。");
+            }
+
+            setShareUrl(url);
+            setShowShareModal(true);
+        } catch (e: any) {
+            alert("分享失敗: " + e.message);
+        }
+    };
+
+    const handleReset = () => {
+        // Clear URL params and reload
+        window.location.href = window.location.pathname;
+    };
+
+    // ... (Keep existing chart data logic: filteredChartData, sortedHoldings) ...
     const filteredChartData = useMemo(() => {
         if (!data || !data.chartData) return [];
-        const now = new Date(); // Real date
+        const now = new Date();
         const points = data.chartData;
-        
         let cutoffDate;
         if (timeRange === 'YTD') cutoffDate = new Date(now.getFullYear(), 0, 1);
         else if (timeRange === '1Y') cutoffDate = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
         else if (timeRange === '3Y') cutoffDate = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
         else if (timeRange === '5Y') cutoffDate = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
         else if (timeRange === '10Y') cutoffDate = new Date(now.getFullYear() - 10, now.getMonth(), now.getDate());
-        
         const filtered = timeRange === 'ALL' ? points : points.filter(p => p.rawDate >= (cutoffDate || new Date(0)));
         const rate = currencyMode === 'TWD' ? exchangeRate : 1;
-        
-        return filtered.map(p => ({
-            ...p,
-            value: p.value * rate,
-            invested: p.invested * rate,
-            returnAbs: p.returnAbs * rate
-        }));
+        return filtered.map(p => ({ ...p, value: p.value * rate, invested: p.invested * rate, returnAbs: p.returnAbs * rate }));
     }, [data, timeRange, currencyMode, exchangeRate]);
 
     const sortedHoldings = useMemo(() => {
@@ -1162,48 +1241,31 @@ export default function Dashboard() {
         setSortConfig({ key, direction });
     };
 
-    const handleDownloadPDF = async () => {
+    const handleDownloadPDF = async () => { /* ... existing logic ... */ 
         if (isGeneratingPdf) return;
         setIsGeneratingPdf(true);
         await new Promise(r => setTimeout(r, 1000));
         try {
             const doc = new jsPDF('l', 'pt', 'a4');
             const container = document.getElementById('pdf-hidden-zone');
-            // Fix: Now we can properly select .pdf-page elements
             const pages = container?.querySelectorAll('.pdf-page');
-            
             if (pages && pages.length > 0) {
                 for (let i = 0; i < pages.length; i++) {
                     if (i > 0) doc.addPage();
-                    const canvas = await html2canvas(pages[i] as HTMLElement, { 
-                        scale: 2, 
-                        logging: false, 
-                        useCORS: true,
-                        allowTaint: true,
-                        backgroundColor: '#ffffff'
-                    });
+                    const canvas = await html2canvas(pages[i] as HTMLElement, { scale: 2, logging: false, useCORS: true, allowTaint: true, backgroundColor: '#ffffff' });
                     const imgData = canvas.toDataURL('image/jpeg', 1.0);
                     const pdfWidth = doc.internal.pageSize.getWidth();
                     const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
                     doc.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
                 }
                 doc.save(\`\${selectedPortfolio}_Report.pdf\`);
-            } else {
-                console.error("No pages found to generate PDF");
             }
-        } catch (e: any) {
-            alert('PDF Error: ' + e.message);
-        } finally {
-            setIsGeneratingPdf(false);
-        }
+        } catch (e: any) { alert('PDF Error: ' + e.message); } finally { setIsGeneratingPdf(false); }
     };
 
-    const savePriceEdit = (symbol: string) => {
-        if (editValue && !isNaN(parseFloat(editValue))) {
-            setPriceOverrides(prev => ({ ...prev, [symbol]: parseFloat(editValue) }));
-        }
-        setEditingSymbol(null);
-        setEditValue("");
+    const savePriceEdit = (symbol: string) => { /* ... existing logic ... */ 
+        if (editValue && !isNaN(parseFloat(editValue))) setPriceOverrides(prev => ({ ...prev, [symbol]: parseFloat(editValue) }));
+        setEditingSymbol(null); setEditValue("");
     };
 
     const loadDemoData = () => {
@@ -1214,58 +1276,65 @@ export default function Dashboard() {
     // Render Logic
     if (!rawData) return ( <> <PasteModal isOpen={isPasteModalOpen} onClose={() => setIsPasteModalOpen(false)} onPaste={setRawData} /> <input type="file" ref={fileInputRef} onChange={handleFileLoad} accept=".csv" className="hidden" /> <EmptyState onImport={() => fileInputRef.current?.click()} onPaste={() => setIsPasteModalOpen(true)} onLoadDemo={loadDemoData} /> </> );
     
-    if (isLoading || !data) return ( <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50"> <div className="animate-spin text-blue-600 mb-4"><Icons.Loader2 size={40} /></div> <p className="text-slate-600 font-medium">正在透過後端抓取歷史股價與匯率...</p> </div> );
+    if (isLoading || !data) return ( <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50"> <div className="animate-spin text-blue-600 mb-4"><Icons.Loader2 size={40} /></div> <p className="text-slate-600 font-medium">{isSharedMode ? "正在載入分享的投資組合..." : "正在分析資料..."}</p> </div> );
 
     const totalValue = data.summary.totalValue;
-    const pieData = sortedHoldings.map((h, i) => ({ 
-        name: h.symbol, 
-        value: h.value, 
-        percent: totalValue > 0 ? h.value / totalValue : 0, 
-        color: COLORS[i % COLORS.length] 
-    }));
-    const currentTxs = [...data.transactions].slice((currentPage-1)*10, currentPage*10); // Already reversed in logic
+    const pieData = sortedHoldings.map((h, i) => ({ name: h.symbol, value: h.value, percent: totalValue > 0 ? h.value / totalValue : 0, color: COLORS[i % COLORS.length] }));
+    const currentTxs = [...data.transactions].slice((currentPage-1)*10, currentPage*10);
 
-    const renderCustomPieLabel = (props: any) => {
+    const renderCustomPieLabel = (props: any) => { /* ... existing logic ... */ 
         const { cx, cy, midAngle, innerRadius, outerRadius, percent, index, name } = props;
         const RADIAN = Math.PI / 180;
         const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
         const x = cx + (outerRadius + 30) * Math.cos(-midAngle * RADIAN);
         const y = cy + (outerRadius + 30) * Math.sin(-midAngle * RADIAN);
-        return (
-            <text x={x} y={y} fill="#374151" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize="12">
-                {\`\${name} \${(percent * 100).toFixed(0)}%\`}
-            </text>
-        );
+        return <text x={x} y={y} fill="#374151" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize="12">{\`\${name} \${(percent * 100).toFixed(0)}%\`}</text>;
     };
 
     return (
         <div className="min-h-screen bg-slate-50 pb-12 font-sans">
             <PasteModal isOpen={isPasteModalOpen} onClose={() => setIsPasteModalOpen(false)} onPaste={setRawData} />
+            <ShareModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} url={shareUrl} />
             <input type="file" ref={fileInputRef} onChange={handleFileLoad} accept=".csv" className="hidden" />
             
             <nav className="bg-white border-b border-gray-200 sticky top-0 z-50 px-4 h-16 flex items-center justify-between shadow-sm">
-                <div className="flex items-center gap-2 cursor-pointer" onClick={() => setRawData(null)}>
+                <div className="flex items-center gap-2 cursor-pointer" onClick={() => !isSharedMode && setRawData(null)}>
                     <div className="bg-blue-600 p-1.5 rounded-lg"><Icons.Briefcase size={20} className="text-white" /></div>
                     <span className="font-bold text-xl tracking-tight text-gray-900">Portfolio<span className="text-blue-600">Viz</span></span>
                 </div>
                 <div className="flex items-center gap-3">
-                    {/* Currency Toggle */}
                     <div className="flex items-center bg-gray-100 p-1 rounded-lg border border-gray-200">
                         <button onClick={() => setCurrencyMode('TWD')} className={\`px-3 py-1 text-xs font-bold rounded-md transition-all \${currencyMode==='TWD' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}\`}>TWD</button>
                         <button onClick={() => setCurrencyMode('USD')} className={\`px-3 py-1 text-xs font-bold rounded-md transition-all \${currencyMode==='USD' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}\`}>USD</button>
                     </div>
 
-                    {/* Exchange Rate Input */}
                     <div className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200 group focus-within:ring-2 ring-blue-500 ring-offset-1 transition-all">
                         <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">USD/TWD</span>
                         <div className="flex items-center gap-1">
                             <input type="number" value={exchangeRate} onChange={(e) => setExchangeRate(parseFloat(e.target.value))} className="w-16 bg-transparent text-sm font-mono font-bold text-blue-600 focus:outline-none text-right" />
-                            <div className="text-gray-400 hover:text-blue-500 cursor-pointer" title="重新抓取匯率" onClick={() => {/* Refetch logic could go here */}}><Icons.RefreshCw size={14} /></div>
+                            <div className="text-gray-400 hover:text-blue-500 cursor-pointer" onClick={() => {}}><Icons.RefreshCw size={14} /></div>
                         </div>
                     </div>
                     
-                    <button onClick={() => setIsPasteModalOpen(true)} className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hidden sm:flex"><Icons.Clipboard size={16} /><span>貼上</span></button>
-                    <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hidden sm:flex"><Icons.Upload size={16} /><span>匯入</span></button>
+                    {!isSharedMode && (
+                        <>
+                            <button onClick={() => setIsPasteModalOpen(true)} className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hidden sm:flex"><Icons.Clipboard size={16} /><span>貼上</span></button>
+                            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hidden sm:flex"><Icons.Upload size={16} /><span>匯入</span></button>
+                        </>
+                    )}
+                    
+                    {!isSharedMode && (
+                        <button onClick={handleShare} className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:text-blue-600 transition-colors">
+                            <Icons.Share2 size={16} /><span>分享</span>
+                        </button>
+                    )}
+
+                    {isSharedMode && (
+                        <button onClick={handleReset} className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-gray-600 rounded-lg hover:bg-gray-700 shadow-sm transition-colors">
+                            <Icons.Home size={16} /><span>回首頁</span>
+                        </button>
+                    )}
+
                     <button onClick={handleDownloadPDF} disabled={isGeneratingPdf} className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm disabled:opacity-70 disabled:cursor-not-allowed min-w-[110px] justify-center transition-all active:scale-95">
                         {isGeneratingPdf ? <Icons.Loader2 size={16} className="animate-spin"/> : <Icons.Download size={16} />}
                         <span>{isGeneratingPdf ? "生成中..." : "下載 PDF"}</span>
@@ -1278,19 +1347,25 @@ export default function Dashboard() {
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                     <div>
                         <div className="flex items-center gap-3 mb-1">
-                            <h1 className="text-3xl font-extrabold text-gray-900">{selectedPortfolio}</h1>
-                            <div className="relative group">
-                                <select value={selectedPortfolio} onChange={(e) => setSelectedPortfolio(e.target.value)} className="appearance-none bg-gray-100 text-sm font-bold text-gray-700 px-4 py-2 pr-8 rounded-lg cursor-pointer outline-none focus:ring-2 focus:ring-blue-500 hover:bg-gray-200 transition-colors">
-                                    {portfolios.map(p => <option key={p} value={p}>{p}</option>)}
-                                </select>
-                                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500"><Icons.ChevronDown size={16} /></div>
-                            </div>
+                            {isSharedMode ? (
+                                <h1 className="text-3xl font-extrabold text-gray-900">{selectedPortfolio} <span className="text-sm font-normal text-blue-600 bg-blue-100 px-2 py-1 rounded ml-2 align-middle">分享檢視</span></h1>
+                            ) : (
+                                <>
+                                    <h1 className="text-3xl font-extrabold text-gray-900">{selectedPortfolio}</h1>
+                                    <div className="relative group">
+                                        <select value={selectedPortfolio} onChange={(e) => setSelectedPortfolio(e.target.value)} className="appearance-none bg-gray-100 text-sm font-bold text-gray-700 px-4 py-2 pr-8 rounded-lg cursor-pointer outline-none focus:ring-2 focus:ring-blue-500 hover:bg-gray-200 transition-colors">
+                                            {portfolios.map(p => <option key={p} value={p}>{p}</option>)}
+                                        </select>
+                                        <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500"><Icons.ChevronDown size={16} /></div>
+                                    </div>
+                                </>
+                            )}
                         </div>
                         <p className="text-gray-500 text-sm">投資組合深度分析報告 • 結算日 {new Date().toLocaleDateString()}</p>
                     </div>
                 </div>
 
-                {/* KPI Cards */}
+                {/* ... (Rest of the Dashboard: KPI Cards, Charts, Tables - Same as existing code) ... */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     <MetricCard title="目前市值" value={formatValue(data.summary.totalValue, currencyMode, exchangeRate, true)} trend={data.summary.returnPcnt >= 0 ? 'up' : 'down'} subValue={formatValue(data.summary.totalValue, currencyMode==='TWD'?'USD':'TWD', exchangeRate, true)} />
                     <MetricCard title="淨投入本金" value={formatValue(data.summary.totalCost, currencyMode, exchangeRate, true)} trend="neutral" subValue={formatValue(data.summary.totalCost, currencyMode==='TWD'?'USD':'TWD', exchangeRate, true)} />
