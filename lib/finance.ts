@@ -53,10 +53,9 @@ const safeParseDate = (dateStr: string): string | null => {
     if (!dateStr) return null;
 
     // Remove "GMT" garbage which confuses Safari
-    // Example: "2024-02-16 GMT+0800" -> "2024-02-16"
-    // Also handle "2024/02/16"
     let clean = dateStr.replace(/GMT([+-]\d{4})?/, '').trim();
     
+    // Try dayjs first
     const d = dayjs(clean);
     if (d.isValid()) return d.toISOString();
     
@@ -80,7 +79,6 @@ export const parseCSV = (csvText: string): Transaction[] => {
 
         if (entry['Transaction Date'] && entry['Symbol'] && !entry['Symbol'].includes('CASH')) {
             const type = entry['Type'] || 'Other';
-            // Fix: remove $ and , from numbers to prevent parsing errors
             const cleanNumber = (val: string) => parseFloat(val ? val.replace(/[$,]/g, '') : '0');
             
             const shares = cleanNumber(entry['Shares Owned']);
@@ -125,7 +123,7 @@ export const processPortfolioData = (
 ): ProcessedData | null => {
     const filteredTx = transactions
         .filter(t => t.portfolio === selectedPortfolio)
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        .sort((a, b) => dayjs(a.date).valueOf() - dayjs(b.date).valueOf());
     
     if (filteredTx.length === 0) return null;
 
@@ -140,36 +138,29 @@ export const processPortfolioData = (
         priceLookup[sym] = new Map(marketData[sym].map(d => [d.date, d.price])); 
     });
 
-    // FIX: Set startDate to the VERY END of the first transaction day (23:59:59.999).
-    // Using UTC construction ensures we don't get shifted to the previous day due to timezone offsets.
-    const firstTxDate = new Date(filteredTx[0].date);
-    // Ensure firstTxDate is valid before use
-    if (isNaN(firstTxDate.getTime())) return null;
+    const firstTxDate = dayjs(filteredTx[0].date);
+    if (!firstTxDate.isValid()) return null;
 
-    const startDate = new Date(firstTxDate);
-    startDate.setUTCHours(23, 59, 59, 999);
+    // Set start date to the END of the first transaction day to ensure Day 1 inclusion
+    let currentDate = firstTxDate.hour(23).minute(59).second(59).millisecond(999);
     
-    const now = new Date();
-    const endDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
-
+    const now = dayjs().hour(23).minute(59).second(59).millisecond(999);
+    
     const chartData: ChartDataPoint[] = [];
-    let currentDate = new Date(startDate);
-    
     let txIndex = 0;
     const lastKnownPrices: Record<string, number> = {};
 
-    // Loop protection: max 50 years to prevent infinite loop if dates are wrong
+    // Loop protection
     let loopCount = 0;
     const MAX_LOOPS = 365 * 50; 
 
-    while (currentDate.getTime() <= endDate.getTime()) {
+    while (currentDate.isBefore(now) || currentDate.isSame(now)) {
         if (loopCount++ > MAX_LOOPS) break;
-        if (isNaN(currentDate.getTime())) break;
 
-        const currentDateTs = currentDate.getTime();
-        const dateStr = currentDate.toISOString().split('T')[0];
+        const currentDateTs = currentDate.valueOf();
+        const dateStr = currentDate.format('YYYY-MM-DD');
 
-        while (txIndex < filteredTx.length && new Date(filteredTx[txIndex].date).getTime() <= currentDateTs) {
+        while (txIndex < filteredTx.length && dayjs(filteredTx[txIndex].date).valueOf() <= currentDateTs) {
             const tx = filteredTx[txIndex];
             if (!holdingsMap[tx.symbol]) { 
                 holdingsMap[tx.symbol] = 0; 
@@ -177,12 +168,9 @@ export const processPortfolioData = (
                 currencyMap[tx.symbol] = tx.currency; 
             }
             
-            // Critical: Always cache the transaction price immediately.
-            // This ensures that even if market data is missing for this day, we have a price baseline.
             if (tx.price > 0) {
                 lastKnownPrices[tx.symbol] = tx.price;
             } else if (Math.abs(tx.amount) > 0 && tx.shares > 0) {
-                // Derived price fallback if price column was empty but amount existed
                 lastKnownPrices[tx.symbol] = Math.abs(tx.amount) / tx.shares;
             }
 
@@ -190,7 +178,7 @@ export const processPortfolioData = (
                 holdingsMap[tx.symbol] += tx.shares;
                 costBasisMap[tx.symbol] += Math.abs(tx.amount);
                 totalInvested += Math.abs(tx.amount);
-                xirrFlows.push({ amount: tx.amount, date: new Date(tx.date) });
+                xirrFlows.push({ amount: tx.amount, date: dayjs(tx.date).toDate() });
             } else if (tx.type.includes('Sell') || tx.type === 'Sell All') {
                  if (holdingsMap[tx.symbol] > 0) {
                      const ratio = tx.shares / holdingsMap[tx.symbol];
@@ -199,7 +187,7 @@ export const processPortfolioData = (
                      totalInvested -= costRemoved;
                      holdingsMap[tx.symbol] -= tx.shares;
                  }
-                 xirrFlows.push({ amount: tx.amount, date: new Date(tx.date) });
+                 xirrFlows.push({ amount: tx.amount, date: dayjs(tx.date).toDate() });
             } else if (tx.type === 'Dividend Reinvest') {
                 holdingsMap[tx.symbol] += tx.shares;
             }
@@ -212,25 +200,20 @@ export const processPortfolioData = (
             if (shares > 0.0001) {
                 let price = 0;
                 
-                // Priority 1: User Override
                 if (priceOverrides[sym]) {
                     price = priceOverrides[sym];
                 } 
                 else {
-                    // Priority 2: Market Data
                     const lookupPrice = priceLookup[sym]?.get(dateStr);
                     if (lookupPrice && lookupPrice > 0) {
                         lastKnownPrices[sym] = lookupPrice;
                     }
-                    
-                    // Priority 3: Last Known Price
                     price = lastKnownPrices[sym] || 0;
                 }
 
-                // Priority 4: Average Cost Fallback (CRITICAL FIX: Ensure this runs if price is 0)
                 if (price <= 0 && costBasisMap[sym] > 0 && shares > 0) {
                     price = costBasisMap[sym] / shares;
-                    lastKnownPrices[sym] = price; // Update cache
+                    lastKnownPrices[sym] = price;
                 }
 
                 dailyValue += shares * price;
@@ -238,13 +221,10 @@ export const processPortfolioData = (
         });
 
         if (dailyValue <= 0.001 && totalInvested > 0) {
-            // Safety: Force value = invested if value is anomalously zero to prevent -100% spikes
-            // This happens if price lookup fails completely for the very first day
             const safeValue = totalInvested;
-            
             chartData.push({ 
                 date: dateStr, 
-                rawDate: new Date(currentDate), 
+                rawDate: currentDate.toDate(), 
                 value: safeValue, 
                 invested: totalInvested,
                 returnAbs: 0,
@@ -253,15 +233,14 @@ export const processPortfolioData = (
         } else if (dailyValue > 0 || totalInvested > 0) {
             chartData.push({ 
                 date: dateStr, 
-                rawDate: new Date(currentDate), 
+                rawDate: currentDate.toDate(), 
                 value: dailyValue, 
                 invested: totalInvested,
                 returnAbs: dailyValue - totalInvested,
                 returnPct: totalInvested > 0 ? (dailyValue - totalInvested) / totalInvested * 100 : 0
             });
         }
-        // Increment by 1 UTC day
-        currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+        currentDate = currentDate.add(1, 'day');
     }
 
     const currentHoldings: Holding[] = [];
@@ -272,7 +251,6 @@ export const processPortfolioData = (
         if (shares > 0.001) {
             let price = priceOverrides[sym] ? priceOverrides[sym] : (lastKnownPrices[sym] || 0);
             
-            // Fix: Apply Avg Cost fallback for Current Holdings table as well!
             if (price <= 0 && costBasisMap[sym] > 0 && shares > 0) {
                 price = costBasisMap[sym] / shares;
             }
@@ -306,7 +284,7 @@ export const processPortfolioData = (
         totalCost: totalInvested,
         totalReturn: currentTotalValue - totalInvested,
         returnPcnt: totalInvested > 0 ? ((currentTotalValue - totalInvested) / totalInvested) * 100 : 0,
-        annualizedReturn: xirr(xirrFlows, currentTotalValue, new Date()),
+        annualizedReturn: xirr(xirrFlows, currentTotalValue, dayjs().toDate()),
         maxDrawdown: mdd(chartValues),
         sharpeRatio: sharpe(returns),
         volatility: vol(returns),
