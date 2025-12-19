@@ -236,7 +236,7 @@ export default function Dashboard() {
                 const decompressed = LZString.decompressFromEncodedURIComponent(compressedData);
                 if (decompressed) {
                     setRawData(decompressed);
-                    setSelectedPortfolio(portfolioParam);
+                    setSelectedPortfolio(decodeURIComponent(portfolioParam));
                     setIsSharedMode(true);
                 }
             } catch (e) {

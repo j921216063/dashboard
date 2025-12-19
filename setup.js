@@ -577,27 +577,28 @@ export const parseCSV = (csvText: string): Transaction[] => {
             let isoDate = '';
             try {
                 let dateStr = entry['Transaction Date'];
-                // Try simple date string if present
-                if (dateStr && dateStr.includes('GMT')) {
-                    // Some mobile browsers fail on GMT offsets without standard format
-                    // Fallback: try taking just the date part YYYY-MM-DD
-                    const simpleDate = dateStr.split(' ')[0];
-                    const d = new Date(simpleDate);
-                    if (!isNaN(d.getTime())) {
-                        isoDate = d.toISOString();
-                    } else {
-                        // Retry original
-                        const fullD = new Date(dateStr);
-                        if (!isNaN(fullD.getTime())) {
-                            isoDate = fullD.toISOString();
-                        } else {
-                            throw new Error('Invalid Date');
-                        }
-                    }
-                } else {
-                    const d = new Date(dateStr);
-                    if (isNaN(d.getTime())) throw new Error('Invalid Date');
+                if (!dateStr) throw new Error('Empty date');
+                
+                // Handle "2024-02-16 GMT+0800" -> "2024/02/16"
+                // 1. Remove timezone junk if present to simplify
+                let cleanStr = dateStr.split(' GMT')[0].trim(); 
+                
+                // 2. Replace dashes with slashes for Safari support (YYYY/MM/DD)
+                cleanStr = cleanStr.replace(/-/g, '/');
+
+                let d = new Date(cleanStr);
+                
+                // Double check validity
+                if (Object.prototype.toString.call(d) === "[object Date]" && !isNaN(d.getTime())) {
                     isoDate = d.toISOString();
+                } else {
+                     // Last ditch attempt: use raw string if simple cleaning failed (e.g. standard ISO format)
+                     d = new Date(dateStr);
+                     if (!isNaN(d.getTime())) {
+                         isoDate = d.toISOString();
+                     } else {
+                         throw new Error('Invalid Date');
+                     }
                 }
             } catch (e) {
                 console.warn('Skipping invalid date:', entry['Transaction Date']);
@@ -1117,7 +1118,7 @@ export default function Dashboard() {
                 const decompressed = LZString.decompressFromEncodedURIComponent(compressedData);
                 if (decompressed) {
                     setRawData(decompressed);
-                    setSelectedPortfolio(portfolioParam);
+                    setSelectedPortfolio(decodeURIComponent(portfolioParam));
                     setIsSharedMode(true);
                 }
             } catch (e) {
