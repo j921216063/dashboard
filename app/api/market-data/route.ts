@@ -31,10 +31,14 @@ export async function POST(request: Request) {
         try {
           const queryOptions = { period1: period1, interval: '1d' as const };
           const quote = await yahooFinance.historical(symbol as string, queryOptions);
-          marketData[symbol as string] = quote.map((q) => ({
-            date: q.date.toISOString().split('T')[0],
-            price: q.adjClose || q.close,
-          }));
+          marketData[symbol as string] = quote.map((q) => {
+            // FIX: Safe date parsing for API results
+            const dateStr = q.date.toISOString().split('T')[0];
+            return {
+              date: dateStr,
+              price: q.adjClose || q.close,
+            };
+          });
         } catch (error) {
           console.error(`Error fetching ${symbol}:`, error);
           marketData[symbol as string] = [];

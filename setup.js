@@ -540,6 +540,35 @@ const vol = (returns: number[]) => {
     return Math.sqrt(variance) * Math.sqrt(52) * 100;
 };
 
+// --- Date Parsing Helper ---
+const safeParseDate = (dateStr: string): string | null => {
+    if (!dateStr) return null;
+
+    try {
+        // 1. Try ISO string directly
+        let d = new Date(dateStr);
+        if (!isNaN(d.getTime())) return d.toISOString();
+
+        // 2. Handle "YYYY-MM-DD GMT+..." format (Common in CSVs)
+        // Remove timezone info which confuses Safari
+        const cleanStr = dateStr.split(' GMT')[0].trim();
+        
+        // 3. Replace dashes with slashes (Safari often prefers YYYY/MM/DD)
+        const slashStr = cleanStr.replace(/-/g, '/');
+        d = new Date(slashStr);
+        if (!isNaN(d.getTime())) return d.toISOString();
+
+        // 4. Try parsing just the date part if time exists
+        const justDate = cleanStr.split(' ')[0].replace(/-/g, '/');
+        d = new Date(justDate);
+        if (!isNaN(d.getTime())) return d.toISOString();
+
+    } catch (e) {
+        // Fallthrough
+    }
+    return null;
+};
+
 // --- Core Parsing ---
 export const parseCSV = (csvText: string): Transaction[] => {
     if (!csvText) return [];
@@ -574,45 +603,20 @@ export const parseCSV = (csvText: string): Transaction[] => {
             }
 
             // Safe Date Parsing for Mobile (Safari)
-            let isoDate = '';
-            try {
-                let dateStr = entry['Transaction Date'];
-                if (!dateStr) throw new Error('Empty date');
-                
-                // Handle "2024-02-16 GMT+0800" -> "2024/02/16"
-                // 1. Remove timezone junk if present to simplify
-                let cleanStr = dateStr.split(' GMT')[0].trim(); 
-                
-                // 2. Replace dashes with slashes for Safari support (YYYY/MM/DD)
-                cleanStr = cleanStr.replace(/-/g, '/');
-
-                let d = new Date(cleanStr);
-                
-                // Double check validity
-                if (Object.prototype.toString.call(d) === "[object Date]" && !isNaN(d.getTime())) {
-                    isoDate = d.toISOString();
-                } else {
-                     // Last ditch attempt: use raw string if simple cleaning failed (e.g. standard ISO format)
-                     d = new Date(dateStr);
-                     if (!isNaN(d.getTime())) {
-                         isoDate = d.toISOString();
-                     } else {
-                         throw new Error('Invalid Date');
-                     }
-                }
-            } catch (e) {
+            const isoDate = safeParseDate(entry['Transaction Date']);
+            
+            if (isoDate) {
+                data.push({
+                    id: i.toString(),
+                    symbol: entry['Symbol'],
+                    portfolio: entry['Portfolio'] || 'Default',
+                    currency, shares, price, commission,
+                    date: isoDate,
+                    type: type as any, amount
+                });
+            } else {
                 console.warn('Skipping invalid date:', entry['Transaction Date']);
-                continue;
             }
-
-            data.push({
-                id: i.toString(),
-                symbol: entry['Symbol'],
-                portfolio: entry['Portfolio'] || 'Default',
-                currency, shares, price, commission,
-                date: isoDate,
-                type: type as any, amount
-            });
         }
     }
     return data;
@@ -645,6 +649,9 @@ export const processPortfolioData = (
     // FIX: Set startDate to the VERY END of the first transaction day (23:59:59.999).
     // Using UTC construction ensures we don't get shifted to the previous day due to timezone offsets.
     const firstTxDate = new Date(filteredTx[0].date);
+    // Ensure firstTxDate is valid before use
+    if (isNaN(firstTxDate.getTime())) return null;
+
     const startDate = new Date(firstTxDate);
     startDate.setUTCHours(23, 59, 59, 999);
     
@@ -657,7 +664,14 @@ export const processPortfolioData = (
     let txIndex = 0;
     const lastKnownPrices: Record<string, number> = {};
 
+    // Loop protection: max 50 years to prevent infinite loop if dates are wrong
+    let loopCount = 0;
+    const MAX_LOOPS = 365 * 50; 
+
     while (currentDate.getTime() <= endDate.getTime()) {
+        if (loopCount++ > MAX_LOOPS) break;
+        if (isNaN(currentDate.getTime())) break;
+
         const currentDateTs = currentDate.getTime();
         const dateStr = currentDate.toISOString().split('T')[0];
 
@@ -849,10 +863,14 @@ export async function POST(request: Request) {
         try {
           const queryOptions = { period1: period1, interval: '1d' as const };
           const quote = await yahooFinance.historical(symbol as string, queryOptions);
-          marketData[symbol as string] = quote.map((q) => ({
-            date: q.date.toISOString().split('T')[0],
-            price: q.adjClose || q.close,
-          }));
+          marketData[symbol as string] = quote.map((q) => {
+            // FIX: Safe date parsing for API results
+            const dateStr = q.date.toISOString().split('T')[0];
+            return {
+              date: dateStr,
+              price: q.adjClose || q.close,
+            };
+          });
         } catch (error) {
           console.error(\`Error fetching \${symbol}:\`, error);
           marketData[symbol as string] = [];
