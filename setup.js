@@ -1448,7 +1448,7 @@ export default function Dashboard() {
                 </div>
             </main>
             
-            <PdfTemplate data={data} selectedPortfolio={selectedPortfolio} exchangeRate={exchangeRate} currencyMode={currencyMode} />
+            {isGeneratingPdf && <PdfTemplate data={data} selectedPortfolio={selectedPortfolio} exchangeRate={exchangeRate} currencyMode={currencyMode} />}
         </div>
     );
 }
@@ -1508,6 +1508,7 @@ writeFile('next.config.mjs', nextConfig);
 writeFile('tailwind.config.ts', tailwindConfig);
 writeFile('postcss.config.js', postcssConfig);
 writeFile('app/globals.css', globalsCss);
+writeFile('.gitignore', gitignore);
 writeFile('types/index.ts', typesIndex);
 writeFile('lib/utils.tsx', libUtils);
 writeFile('lib/finance.ts', libFinance);

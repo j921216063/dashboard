@@ -603,7 +603,7 @@ export default function Dashboard() {
                 </div>
             </main>
             
-            <PdfTemplate data={data} selectedPortfolio={selectedPortfolio} exchangeRate={exchangeRate} currencyMode={currencyMode} />
+            {isGeneratingPdf && <PdfTemplate data={data} selectedPortfolio={selectedPortfolio} exchangeRate={exchangeRate} currencyMode={currencyMode} />}
         </div>
     );
 }
